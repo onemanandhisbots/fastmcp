@@ -1,41 +1,45 @@
 # server.py
-import asyncio
 import os
+from fastmcp import FastMCP
 
-from fastmcp import FastMCP, Client  # uses the FastMCP library in the repo
+# --- Read n8n MCP config from environment ---
+N8N_MCP_URL = os.environ["N8N_MCP_URL"]  # MCP Server Trigger Production URL
+N8N_MCP_TOKEN = os.getenv("N8N_MCP_TOKEN")  # optional bearer token
 
-N8N_MCP_URL = os.environ["N8N_MCP_URL"]  # set this in Railway (you already did)
-N8N_MCP_TOKEN = os.environ.get("N8N_MCP_TOKEN")  # optional auth token for n8n
 
+# --- Build an MCPConfig-style proxy pointing at n8n ---
+config = {
+    "mcpServers": {
+        # The name here (n8n) becomes the prefix if you ever proxy multiple servers.
+        "n8n": {
+            "url": N8N_MCP_URL,
+            # This tells FastMCP to treat it as a Streamable HTTP MCP endpoint.
+            "transport": "http",
+        }
+    }
+}
 
-async def build_proxy() -> FastMCP:
-    """
-    Build a FastMCP proxy that forwards everything to your n8n MCP server.
-    This makes your Railway service look like a 'proper' MCP server
-    to ChatGPT / connectors.
-    """
-    # FastMCP Client auto-detects HTTP/SSE transport from the URL
-    client = Client(
-        N8N_MCP_URL,
-        auth=N8N_MCP_TOKEN,  # if set, will be sent as Authorization: Bearer <token> 
-    )
+# If we have a token, send it as Authorization: Bearer <token>
+if N8N_MCP_TOKEN:
+    config["mcpServers"]["n8n"]["headers"] = {
+        "Authorization": f"Bearer {N8N_MCP_TOKEN}",
+    }
 
-    proxy = await FastMCP.as_proxy(
-        client,
-        name="n8n-proxy",
-    )
-    return proxy
+# Create a proxy server that mirrors the remote n8n MCP server
+# This will forward tools, resources, prompts, etc.
+proxy = FastMCP.as_proxy(config, name="n8n-proxy")
 
 
 if __name__ == "__main__":
-    proxy = asyncio.run(build_proxy())
-
-    # Railway injects PORT; default to 8000 locally
+    # Railway gives us PORT; default to 8000 locally
     port = int(os.environ.get("PORT", "8000"))
 
-    # Expose as Streamable HTTP MCP server at /mcp
+    # Expose the proxy over HTTP (Streamable HTTP transport)
+    # The MCP endpoint will be: http(s)://<railway-domain>/mcp
     proxy.run(
-        transport="streamable-http",
+        transport="http",
         host="0.0.0.0",
         port=port,
+        path="/mcp",
     )
+
